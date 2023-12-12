@@ -1,76 +1,15 @@
 import os
 
-import numpy as np
-from sklearn.model_selection import train_test_split
-
-import concurrent.futures
-
-import tensorflow as tf
-from tensorflow.keras import layers, models
-
-
-from typing import Dict, List
-
 import chess
-import chess.pgn
-import chess.engine
+import numpy as np
+import tensorflow as tf
 
-NUM_GAMES = 1000
+from typing import Dict
 
-script_path = os.path.abspath(__file__)
-dataset_path = os.path.join(os.path.dirname(script_path), 'data', 'lichess_db_standard_rated_2013-01.pgn')
-stockfish_path = os.path.join(os.path.dirname(script_path), 'engines', 'stockfish', '16', 'bin', 'stockfish')
+from models.chess_ai import ChessAI
 
-pgn_file = open(dataset_path)
-
-# Extract moves from games where both White and Black Elo are above 2000
-filtered_moves: List[chess.pgn.Mainline[chess.Move]] = []
-num_games: int = 0
-while True:
-    game = chess.pgn.read_game(pgn_file)
-    
-    if game is None:
-        break
-
-    if num_games >= NUM_GAMES:
-        break
-
-    # Check if both White and Black Elo are above 2000
-    if (
-        "WhiteElo" in game.headers
-        and "BlackElo" in game.headers
-        and game.headers["WhiteElo"] != "?"
-        and game.headers["BlackElo"] != "?"
-        and int(game.headers["WhiteElo"]) > 2000
-        and int(game.headers["BlackElo"]) > 2000
-    ):
-        num_games += 1
-        print("games loaded:", num_games)
-        filtered_moves.append([move for move in game.mainline_moves()])
-
-pgn_file.close()
-
-def get_stockfish_evaluation(board: chess.Board, time_limit_seconds: float) -> int:
-    """
-    Gets the stockfish evaluation for a board as a centipawn score.
-    A centipawn score measures how good a position is for a player in
-    terms of pawns. A score of 50 means White is up half a pawn, while
-    a score of -200 means Black is up two pawns.
-
-    Arguments:
-        board (Board): A chess board to evaluate
-        time (float): a maximum time limit for stockfish to run in seconds
-    
-    Returns:
-        (int): The stockfish evaluation for a board as a centipawn score.
-    """
-    with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
-        # Analyze the position
-        info: chess.engine.InfoDict = engine.analyse(board=board, limit=chess.engine.Limit(time=time_limit_seconds))
-        # Get the evaluation score (in centipawns)
-        score: int = info["score"].relative.score()
-
-    return score
+script_path: str = os.path.abspath(__file__)
+model_path: str = os.path.join(os.path.dirname(script_path), 'save', 'model_all_l2')
 
 def board_to_input(board: chess.Board) -> np.ndarray:
     """
@@ -102,75 +41,55 @@ def board_to_input(board: chess.Board) -> np.ndarray:
 
     return input_array
 
-games_evaluated: int = 0
+class CNNAI(ChessAI):
+    def __init__(self):
+        super().__init__()
+        self.model = tf.keras.models.load_model(model_path)
 
-def evaluate_game(game):
-    global games_evaluated
-    board = chess.Board()
-    print(type(board.fen()))
-    positions = []
-    evaluations = []
+    def evaluate_board(self, board: chess.Board) -> float:
+        """
+        Evaluates a board using a neural network model.
 
-    for move in game:
-        board.push(move)
-        positions.append(board_to_input(board))
-        evaluations.append(get_stockfish_evaluation(board, time_limit_seconds=0.1))
+        Arguments:
+            board (Board): A board to evaluate
+        
+        Returns:
+            (float): An evaluation score
+        """
+        # Convert the chess board to the input format expected by the model
+        input_array = board_to_input(board)
+        # automatically select winning moves
+        if board.is_checkmate():
+            return float('inf') if board.turn == chess.WHITE else float('-inf')
+        # Make a prediction using the loaded model
+        evaluation = self.model.predict(np.expand_dims(input_array, axis=0))[0][0]
+        return evaluation
 
-    games_evaluated += 1
-    print("games evaluated:", games_evaluated)
-    return positions, evaluations
+    def find_move(self, board: chess.Board) -> chess.Move:
+        """
+        Finds the best move for a given board using a neural network model.
 
-# Use concurrent.futures to parallelize stockfish evaluations
-with concurrent.futures.ThreadPoolExecutor() as executor:
-    all_results = list(executor.map(evaluate_game, filtered_moves))
+        Arguments:
+            board (chess.Board): A board to evaluate
 
-# Unpack the results into separate lists for positions and evaluations
-x_board, y_evaluation = zip(*all_results)
+        Returns:
+            (chess.Move): The best move given the board
+        """
+        legal_moves = list(board.legal_moves)
+        best_move = None
+        turn: chess.Color = board.turn
+        best_evaluation = -float('inf') if turn == chess.WHITE else float('inf')
 
-# Flatten the lists of positions and evaluations
-x_board = [pos for game_positions in x_board for pos in game_positions]
-y_evaluation = [score for game_scores in y_evaluation for score in game_scores]
+        for move in legal_moves:
+            board.push(move)
+            evaluation = self.evaluate_board(board)
+            board.pop()
 
+            if turn == chess.WHITE and evaluation > best_evaluation:
+                best_evaluation = evaluation
+                best_move = move
+            elif turn == chess.BLACK and evaluation < best_evaluation:
+                best_evaluation = evaluation
+                best_move = move
 
-# Split data into training and validation sets
-X_train, X_test, y_train, y_test = train_test_split(np.array(x_board), np.array(y_evaluation), test_size=0.2, random_state=42)
-
-X_train = X_train.astype(np.float32)
-y_train = y_train.astype(np.float32)
-X_test = X_test.astype(np.float32)
-y_test = y_test.astype(np.float32)
-
-y_train = np.nan_to_num(y_train, nan=0.0)
-y_test = np.nan_to_num(y_test, nan=0.0)
-
-print("Y_TRAIN")
-print(y_train)
-
-print("Building model...")
-# Build the CNN model
-model = models.Sequential([
-    layers.Conv2D(32, (3, 3), activation='relu', input_shape=(12, 8, 8)),
-    layers.MaxPooling2D((1, 1)),
-    layers.Conv2D(64, (3, 3), activation='relu'),
-    layers.MaxPooling2D((1, 1)),
-    layers.Flatten(),
-    layers.Dense(64, activation='relu'),
-    layers.Dense(1)  # Output layer for evaluation
-])
-
-
-print("Compiling model...")
-# Compile the model
-model.compile(optimizer='adam', loss='mean_squared_error')
-
-# Train the model
-model.fit(X_train, y_train, epochs=10, validation_data=(X_test, y_test))
-
-# Evaluate the model on the validation set
-loss = model.evaluate(X_test, y_test)
-print(f"Validation Loss: {loss}")
-
-save_path = os.path.join(os.path.dirname(script_path), 'save', 'model')
-
-# # Save the entire model to the absolute path
-model.save(save_path)
+        return best_move

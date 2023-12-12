@@ -4,6 +4,8 @@ import chess.pgn
 import chess.engine
 from concurrent.futures import ThreadPoolExecutor
 
+from typing import List, Tuple
+
 BATCH_SIZE = 100
 NUM_GAMES = 3000
 MAX_WORKERS = 8
@@ -32,9 +34,20 @@ def get_stockfish_evaluation(board: chess.Board, time_limit_seconds: float) -> i
         score: int = info["score"].relative.score()
 
     return score
-def process_game(game):
+def process_game(game: chess.pgn.Game) -> List[Tuple[str, float]]:
+    """
+    Evaluates all boards in a given chess game.
+
+    Arguments:
+        game (Game): A chess game to evaluate
+    
+    Returns:
+        (List[Tuple[str, float]]): A list of tuples containing the fen strings of
+                                   the boards in the game, and their corresponding
+                                   stockfish evaluations
+    """
     board = chess.Board()
-    fen_stockfish_evaluations = []
+    fen_stockfish_evaluations: List[Tuple[str, float]] = []
 
     for move in game.mainline_moves():
         board.push(move)
@@ -47,7 +60,12 @@ def process_game(game):
     print("Games Processed:", process_game.num_games)
     return fen_stockfish_evaluations
 
-def main():
+def main() -> None:
+    """
+    Reads in data from a pgn file and labels all the moves in every game in the file.
+    The fen strings of the boards and their corresponding stockfish evalutions will be
+    written to a text file.
+    """
     script_path = os.path.abspath(__file__)
     dataset_path = os.path.join(os.path.dirname(script_path), 'data', 'lichess_db_standard_rated_2014-08.pgn')
     pgn_file = open(dataset_path)

@@ -17,16 +17,23 @@ class MCTSAI(ChessAI):
     """
     Represents a chess AI that makes moves based on the Monte Carlo Tree Search algorithm.
     """
-    def __init__(self, iterations=1000):
+    def __init__(self, iterations=10):
         self.iterations = iterations
 
     def find_move(self, board: chess.Board) -> chess.Move:
         root = MCTSTreeNode(None)
 
         for _ in range(self.iterations):
+            new_node = MCTSTreeNode(None)
+
             node = self.selection(root)
             outcome = self.simulation(node, board.copy())
-            self.backpropagation(node, outcome)
+
+            new_node.parent = node
+
+            self.backpropagation(new_node, outcome)
+
+            node.children.append(new_node)
 
         best_child = self.best_child(root)
         return best_child.move
@@ -42,10 +49,14 @@ class MCTSAI(ChessAI):
                                                     exploration_weight * math.sqrt(math.log(node.visits) / child.visits))
 
     def simulation(self, node: MCTSTreeNode, board: chess.Board) -> int:
+        list_of_moves = []
+
         while not board.is_game_over():
             legal_moves = list(board.legal_moves)
             move = random.choice(legal_moves)
+            list_of_moves.append(move)
             board.push(move)
+        node.move = list_of_moves[0]
         return self.get_outcome(board)
 
     def backpropagation(self, node: MCTSTreeNode, outcome: int):
@@ -63,4 +74,4 @@ class MCTSAI(ChessAI):
         elif board.is_stalemate() or board.is_insufficient_material() or board.is_seventyfive_moves():
             return 0
         else:
-            return 0  # Adjust as needed for other endgame conditions
+            return 0
