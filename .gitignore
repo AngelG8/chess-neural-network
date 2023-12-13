@@ -1,6 +1,4 @@
 /chess_venv
-/models/data
-/models/save
 /simulation
 .DS_Store
 __pycache__
